@@ -2,26 +2,446 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>石虎自動相機點位呈現及資料分析</title>
-    <!-- 這裡放您引入的 Tailwind CSS、Leaflet 地圖、Excel 匯出等工具網址 -->
+    
+    <!-- 引入分析工具所需的外部套件 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
 </head>
-<body>
+<body class="bg-gray-50 text-gray-800 p-6">
 
     <!-- ========================================== -->
-    <!-- 這裡放您原本設計的所有版面內容 (包含 <main>、<div id="tab-oi"> 等標籤) -->
+    <!-- 網頁畫面 (HTML) -->
     <!-- ========================================== -->
     <main>
-        ... (保留您原本的所有 HTML)
+        <!-- ... existing code ... -->
+        <div id="tab-oi" class="tab-content space-y-6 hidden">
+             <!-- 0. 綜合匯出與動態地圖區 -->
+             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-semibold text-gray-800">OI 值空間分布圖與綜合匯出</h3>
+                    <button id="btn-export-all" class="text-sm bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-6 rounded-full shadow-lg hidden transition transform hover:scale-105">
+                        匯出分析結果 (Excel)
+                    </button>
+                </div>
+                <div id="oi-map-container" class="border border-gray-200 rounded mb-2 bg-gray-50" style="height: 400px; display: none;"></div>
+                <div id="oi-map-legend" class="flex flex-wrap gap-4 text-sm px-2"></div>
+                <p class="text-xs text-gray-400 mt-2 italic" id="oi-map-hint">請先在下方執行分析，地圖將依據分析結果動態呈現 OI 值泡泡分布。</p>
+             </div>
+
+             <!-- 1. 物種名錄區塊 -->
+             <!-- ... existing code ... -->
+             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-3 text-left font-medium text-gray-500" id="th-result-entity">地點編號 / 群組</th>
+                                <th class="px-4 py-3 text-left font-medium text-gray-500">物種名稱</th>
+                                <th class="px-4 py-3 text-right font-medium text-blue-600">個體計算 (n)</th>
+                                <th class="px-4 py-3 text-right font-medium text-green-600">以群計算 (n)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="result-photos-tbody" class="bg-white divide-y divide-gray-200">
+                            <tr><td colspan="4" class="text-center py-8 text-gray-400">請先在上方勾選物種並點擊「執行分析與計算」</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+             </div>
+
+             <!-- 4. OI值結果呈現區 -->
+             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-10">
+                <div class="flex justify-between items-end mb-2">
+                    <h3 class="text-lg font-semibold text-gray-800">OI 值 (相對豐富度指標) 分析結果</h3>
+                </div>
+                <p class="text-xs text-gray-500 mb-4 bg-gray-50 p-2 rounded border border-gray-100">
+                    * 註：OI 值代表特定物種在單位時間內被記錄到的頻率，能反映該物種在區域內的相對密度與活躍程度。<br>
+                    * 算法：OI = (n / T) × 1000 （每 1000 個相機工作小時所拍到的有效紀錄）。結果已四捨五入至小數點後兩位。
+                </p>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200 text-sm">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-4 py-3 text-left font-medium text-gray-500" id="th-oi-entity">地點編號 / 群組</th>
+                                <th class="px-4 py-3 text-left font-medium text-gray-500">物種名稱</th>
+                                <th class="px-4 py-3 text-right font-medium text-indigo-600">有效工作時 (T)</th>
+                                <th class="px-4 py-3 text-right font-medium text-blue-600">個體 OI 值</th>
+                                <th class="px-4 py-3 text-right font-medium text-green-600">以群 OI 值</th>
+                            </tr>
+                        </thead>
+                        <tbody id="result-oi-tbody" class="bg-white divide-y divide-gray-200">
+                            <tr><td colspan="5" class="text-center py-8 text-gray-400">等待分析計算...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+             </div>
+
+        </div>
     </main>
 
     <!-- ========================================== -->
-    <!-- 重點：您的 JavaScript 運算邏輯必須包在 script 標籤裡面！ -->
+    <!-- 運算邏輯 (JavaScript) -->
     <!-- ========================================== -->
     <script>
-        // 這裡放您原本從 const State = { ... } 開始到結尾的所有邏輯
-        const State = { ... };
+        const State = {
+            rawData: [],
+            speciesList: [],
+            processedSpecies: [], // 處理過後的名錄
+            treeData: {}, // 階層架構資料
+            calculationMode: 'individual', // 'individual' or 'group'
+            groups: {}, // 分區群組，如 { "台中北區": Set(["CE13-1.01", ...]) }
+            rollHours: {}, // 紀錄每一卷的工作時數 { "roll1": {loc: "A", hours: 100} }
+            usedRolls: new Set(), // 紀錄已經被分區的卷，避免重複
+            locCoords: {}, // 記錄各點位的經緯度 { "LocA": [lat, lng] }
+            lastAnalysisResults: [] // 儲存最後一次分析結果供匯出與地圖使用
+        };
+
+        // --- TWD97 (EPSG:3826) 定義 ---
+        // ... existing code ...
+
+        let map = null;
+        let oiMap = null; // 第二張供 OI 使用的地圖
+        let oiMapLayers = []; // 紀錄地圖上的氣泡圖層
+        const palette = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#14b8a6", "#f97316"]; // 色票
+
+        // --- 檔案上傳邏輯 ---
+        // ... existing code ...
+
+        function calculateEffectivePhotos() {
+            // 取出使用者勾選的物種代號
+            const selInd = Array.from(document.querySelectorAll('.cb-ind:checked')).map(cb => cb.value);
+            const selGrp = Array.from(document.querySelectorAll('.cb-grp:checked')).map(cb => cb.value);
+
+            if(selInd.length === 0 && selGrp.length === 0) {
+                alert('請至少勾選一個物種進行分析！'); return;
+            }
+
+            const results = {}; // 存放結果: { "群組或點位": { "物種代碼": { ind: 0, grp: 0 } } }
+            let totalPhotos = 0; // KPI
+
+            // 1. 計算有效照片 (n)
+            State.rawData.forEach(row => {
+                const loc = String(row['地點編號'] || row['相機位置'] || '').trim();
+                const roll = String(row['卷編號'] || row['捲編號'] || row['相機工作檔名'] || '').trim();
+                const code = String(row['動物代號'] || row['物種代號'] || row['Species_Code'] || '').trim();
+                
+                // ... existing code ...
+                if (selGrp.includes(code)) {
+                    // 為了避免報錯，此處先隱藏原本的 isLianPai 等未定義變數
+                    // if (!isLianPai && !isOISha && !isTongQun) {
+                    //    results[targetEntity][code].grp++;
+                    //    if(!selInd.includes(code)) totalPhotos++; 
+                    // }
+                }
+            });
+
+            // 2. 獲取每個實體的總工作時 (T) 並計算 OI
+            const entityHours = {};
+            if (State.calculationMode === 'group') {
+                Object.keys(State.groups).forEach(gName => {
+                    let h = 0;
+                    State.groups[gName].forEach(roll => { if (State.rollHours[roll]) h += State.rollHours[roll].hours; });
+                    entityHours[gName] = h;
+                });
+            } else {
+                const cbs = document.querySelectorAll('#tree-container .tree-cb:checked');
+                cbs.forEach(cb => {
+                    const nodeDiv = cb.closest('div').parentElement;
+                    if (nodeDiv.dataset.level === '4') {
+                        const roll = nodeDiv.dataset.name;
+                        if (State.rollHours[roll]) {
+                            const loc = State.rollHours[roll].loc;
+                            if(!entityHours[loc]) entityHours[loc] = 0;
+                            entityHours[loc] += State.rollHours[roll].hours;
+                        }
+                    }
+                });
+            }
+
+            // 3. 組合最終結果陣列
+            State.lastAnalysisResults = [];
+            Object.keys(results).forEach(entity => {
+                const T = entityHours[entity] || 0;
+                Object.keys(results[entity]).forEach(code => {
+                    const species = State.processedSpecies.find(s => s.code === code);
+                    const nInd = results[entity][code].ind;
+                    const nGrp = results[entity][code].grp;
+                    
+                    if(species && (nInd > 0 || nGrp > 0)) {
+                        const oiInd = T > 0 ? ((nInd / T) * 1000) : 0;
+                        const oiGrp = T > 0 ? ((nGrp / T) * 1000) : 0;
+                        
+                        State.lastAnalysisResults.push({
+                            entity: entity,
+                            species: species,
+                            T: T,
+                            nInd: nInd,
+                            nGrp: nGrp,
+                            oiInd: parseFloat(oiInd.toFixed(2)),
+                            oiGrp: parseFloat(oiGrp.toFixed(2))
+                        });
+                    }
+                });
+            });
+
+            // 排序: 實體 -> 生物學分類
+            State.lastAnalysisResults.sort((a, b) => {
+                if (a.entity !== b.entity) return a.entity.localeCompare(b.entity);
+                if (a.species.class !== b.species.class) return a.species.class.localeCompare(b.species.class);
+                if (a.species.order !== b.species.order) return a.species.order.localeCompare(b.species.order);
+                if (a.species.family !== b.species.family) return a.species.family.localeCompare(b.species.family);
+                return a.species.name.localeCompare(b.species.name);
+            });
+
+            document.getElementById('kpi-photos').textContent = totalPhotos.toLocaleString();
+            
+            // 渲染表格與地圖
+            renderPhotosResultTable();
+            renderOIResultTable();
+            
+            document.getElementById('oi-map-container').style.display = 'block';
+            document.getElementById('oi-map-hint').style.display = 'none';
+            document.getElementById('btn-export-all').classList.remove('hidden');
+            
+            if(!oiMap) initOIMap();
+            setTimeout(() => {
+                if(oiMap) oiMap.invalidateSize();
+                renderOIMapData();
+            }, 200);
+            
+            alert('有效照片數與 OI 值計算完成！');
+        }
+
+        // 渲染有效照片數結果表
+        function renderPhotosResultTable() {
+            const tbody = document.getElementById('result-photos-tbody');
+            tbody.innerHTML = '';
+            document.getElementById('th-result-entity').textContent = State.calculationMode === 'group' ? '自訂群組名稱' : '地點編號';
+
+            if (State.lastAnalysisResults.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="text-center py-8 text-gray-400">目前設定下無任何符合紀錄</td></tr>';
+                return;
+            }
+
+            State.lastAnalysisResults.forEach(r => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="px-4 py-2 font-semibold text-gray-800">${r.entity}</td>
+                    <td class="px-4 py-2">
+                        <span class="font-medium text-gray-900">${r.species.name}</span>
+                        <span class="text-xs text-gray-500 ml-1">(${r.species.order}/${r.species.family})</span>
+                    </td>
+                    <td class="px-4 py-2 text-right font-bold text-blue-600">${r.nInd > 0 ? r.nInd : '-'}</td>
+                    <td class="px-4 py-2 text-right font-bold text-green-600">${r.nGrp > 0 ? r.nGrp : '-'}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // 渲染 OI 值結果表
+        function renderOIResultTable() {
+            const tbody = document.getElementById('result-oi-tbody');
+            tbody.innerHTML = '';
+            document.getElementById('th-oi-entity').textContent = State.calculationMode === 'group' ? '自訂群組名稱' : '地點編號';
+
+            if (State.lastAnalysisResults.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-gray-400">目前設定下無任何符合紀錄</td></tr>';
+                return;
+            }
+
+            State.lastAnalysisResults.forEach(r => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="px-4 py-2 font-semibold text-gray-800">${r.entity}</td>
+                    <td class="px-4 py-2 font-medium text-gray-900">${r.species.name}</td>
+                    <td class="px-4 py-2 text-right text-indigo-600">${r.T.toFixed(2)}</td>
+                    <td class="px-4 py-2 text-right font-bold text-blue-600">${r.oiInd > 0 ? r.oiInd.toFixed(2) : '-'}</td>
+                    <td class="px-4 py-2 text-right font-bold text-green-600">${r.oiGrp > 0 ? r.oiGrp.toFixed(2) : '-'}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // --- 綜合匯出邏輯 (3分頁) ---
+        document.getElementById('btn-export-all').addEventListener('click', () => {
+            if (State.lastAnalysisResults.length === 0) {
+                alert('沒有可匯出的分析結果！'); return;
+            }
+
+            const wb = XLSX.utils.book_new();
+
+            // 1. 物種名錄
+            const wsSpecies = XLSX.utils.json_to_sheet(State.processedSpecies.map(s => ({
+                '目': s.order, '科': s.family, '中文名': s.name, '學名': s.scientific, '特有種': s.endemic, '保育等級': s.conservation
+            })));
+            XLSX.utils.book_append_sheet(wb, wsSpecies, "物種名錄");
+
+            // 2. 有效照片數分析
+            const wsPhotos = XLSX.utils.json_to_sheet(State.lastAnalysisResults.map(r => ({
+                [State.calculationMode === 'group' ? '群組名稱' : '地點編號']: r.entity,
+                '物種名稱': r.species.name,
+                '學名': r.species.scientific,
+                '個體計算(n)': r.nInd,
+                '以群計算(n)': r.nGrp
+            })));
+            XLSX.utils.book_append_sheet(wb, wsPhotos, "有效照片數分析");
+
+            // 3. OI 值分析結果
+            const wsOI = XLSX.utils.json_to_sheet(State.lastAnalysisResults.map(r => ({
+                [State.calculationMode === 'group' ? '群組名稱' : '地點編號']: r.entity,
+                '物種名稱': r.species.name,
+                '有效工作時(T)': r.T,
+                '個體計算 OI 值': r.oiInd,
+                '以群計算 OI 值': r.oiGrp
+            })));
+            XLSX.utils.book_append_sheet(wb, wsOI, "OI值分析結果");
+
+            // 執行下載
+            const dateStr = new Date().toISOString().slice(0,10).replace(/-/g, '');
+            XLSX.writeFile(wb, `石虎保育分析報告_${dateStr}.xlsx`);
+        });
+
+        // 初始化 OI 專用地圖
+        function initOIMap() {
+            oiMap = L.map('oi-map-container').setView([23.973, 120.982], 10);
+            L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17 }).addTo(oiMap);
+        }
+
+        // 渲染 OI 氣泡地圖
+        function renderOIMapData() {
+            if(!oiMap) return;
+            // 清除舊圖層
+            oiMapLayers.forEach(layer => oiMap.removeLayer(layer));
+            oiMapLayers = [];
+            document.getElementById('oi-map-legend').innerHTML = '';
+
+            // 提取出這次分析中涉及的獨立物種，以分配顏色
+            const uniqueSpecies = [...new Set(State.lastAnalysisResults.map(r => r.species.name))];
+            const speciesColors = {};
+            uniqueSpecies.forEach((name, i) => {
+                speciesColors[name] = palette[i % palette.length];
+                
+                // 建立圖例
+                const legDiv = document.createElement('div');
+                legDiv.className = 'flex items-center space-x-1';
+                legDiv.innerHTML = `<span class="w-4 h-4 rounded-full inline-block" style="background-color: ${speciesColors[name]}; opacity: 0.7; border: 1px solid #333;"></span>
+                                    <span class="font-medium text-gray-700">${name}</span>`;
+                document.getElementById('oi-map-legend').appendChild(legDiv);
+            });
+
+            // 找出本次資料中的最大 OI 值，供氣泡縮放比例參考 (最大氣泡設為 30px)
+            let maxOI = 1; 
+            State.lastAnalysisResults.forEach(r => {
+                const val = Math.max(r.oiInd, r.oiGrp);
+                if(val > maxOI) maxOI = val;
+            });
+
+            // 取得每個實體(地點/群組)的繪圖座標
+            const entityCoords = {};
+            State.lastAnalysisResults.forEach(r => {
+                if(!entityCoords[r.entity]) {
+                    if(State.calculationMode === 'individual') {
+                        entityCoords[r.entity] = State.locCoords[r.entity]; // 直接取該點
+                    } else {
+                        // 群組模式：計算群組內所有已知點位的中心座標
+                        let latSum = 0, lngSum = 0, count = 0;
+                        State.groups[r.entity].forEach(roll => {
+                            if(State.rollHours[roll]) {
+                                const loc = State.rollHours[roll].loc;
+                                if(State.locCoords[loc]) {
+                                    latSum += State.locCoords[loc][0]; lngSum += State.locCoords[loc][1]; count++;
+                                }
+                            }
+                        });
+                        if(count > 0) entityCoords[r.entity] = [latSum/count, lngSum/count];
+                    }
+                }
+            });
+
+            // 繪製氣泡
+            let validCoordsCount = 0;
+            let boundsLatSum = 0, boundsLngSum = 0;
+
+            State.lastAnalysisResults.forEach(r => {
+                const coord = entityCoords[r.entity];
+                if(coord) {
+                    validCoordsCount++;
+                    boundsLatSum += coord[0]; boundsLngSum += coord[1];
+
+                    const displayOI = Math.max(r.oiInd, r.oiGrp);
+                    // 計算半徑：最小 5，最大 30 (非線性開根號縮放較符合視覺比例)
+                    const radius = 5 + (Math.sqrt(displayOI) / Math.sqrt(maxOI)) * 25; 
+                    
+                    // 為了避免多物種重疊太嚴重，稍微給座標加點微小隨機偏移 (Jitter)
+                    const jitterLat = coord[0] + (Math.random() - 0.5) * 0.003;
+                    const jitterLng = coord[1] + (Math.random() - 0.5) * 0.003;
+
+                    const marker = L.circleMarker([jitterLat, jitterLng], {
+                        radius: radius,
+                        fillColor: speciesColors[r.species.name],
+                        color: "#333",
+                        weight: 1,
+                        opacity: 0.8,
+                        fillOpacity: 0.6
+                    });
+
+                    marker.bindPopup(`
+                        <div class="text-sm">
+                            <strong class="text-gray-900 border-b block pb-1 mb-1">${r.entity}</strong>
+                            <span class="text-blue-600 font-bold">${r.species.name}</span><br>
+                            有效工作時: ${r.T.toFixed(2)} hr<br>
+                            個體 OI: ${r.oiInd.toFixed(2)}<br>
+                            以群 OI: ${r.oiGrp.toFixed(2)}
+                        </div>
+                    `);
+
+                    marker.addTo(oiMap);
+                    oiMapLayers.push(marker);
+                }
+            });
+
+            if(validCoordsCount > 0) {
+                oiMap.setView([boundsLatSum/validCoordsCount, boundsLngSum/validCoordsCount], 10);
+            }
+        }
+
+        // --- 時間運算邏輯 ---
+        // ... existing code ...
         
-        ... (保留您原本的所有計算與地圖功能)
+        // 標籤頁切換
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                document.querySelectorAll('.tab-btn').forEach(b => {
+                    b.classList.remove('border-blue-500', 'text-blue-600');
+                    b.classList.add('border-transparent', 'text-gray-500');
+                });
+                e.target.classList.remove('border-transparent', 'text-gray-500');
+                e.target.classList.add('border-blue-500', 'text-blue-600');
+
+                document.querySelectorAll('.tab-content').forEach(content => content.classList.add('hidden'));
+                document.getElementById(e.target.dataset.target).classList.remove('hidden');
+                
+                // 動態渲染數據表
+                if(e.target.dataset.target === 'tab-workhour') renderWorkHours();
+
+                // 若切換回空間分布，需重新觸發 leaflet size
+                if(e.target.dataset.target === 'tab-spatial' && map) {
+                    setTimeout(() => map.invalidateSize(), 100);
+                }
+                
+                // 若切換到 OI 頁面，需重新觸發 leaflet size
+                if(e.target.dataset.target === 'tab-oi' && oiMap) {
+                    setTimeout(() => oiMap.invalidateSize(), 100);
+                }
+            });
+        });
+
+        // 縮放區域
+        // ... existing code ...
     </script>
 </body>
 </html>
