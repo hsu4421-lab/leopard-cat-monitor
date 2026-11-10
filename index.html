@@ -1,0 +1,1396 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台灣石虎保育協會紅外線相機監測分析平台</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3.3.4/dist/vue.global.prod.js"></script>
+    
+    <!-- SheetJS (Excel/CSV Parsing) -->
+    <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+    
+    <!-- Leaflet (Map) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Proj4js (Coordinate Conversion) -->
+    <script src="https://unpkg.com/proj4/dist/proj4.js"></script>
+
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body { font-family: 'Inter', 'Noto Sans TC', sans-serif; background-color: #f1f5f9; }
+        .drag-active { border-color: #10b981 !important; background-color: #ecfdf5 !important; }
+        #map-container, #oi-map-container { z-index: 1; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        /* Message Box Transition */
+        .toast-enter-active, .toast-leave-active { transition: all 0.3s ease; }
+        .toast-enter-from, .toast-leave-to { opacity: 0; transform: translateY(-20px); }
+        
+        .animate-fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+    </style>
+</head>
+<body class="text-slate-800 antialiased h-screen flex flex-col overflow-hidden">
+    <div id="app" class="h-full flex flex-col">
+        
+        <!-- Navbar -->
+        <header class="bg-emerald-800 text-white shadow-md flex-shrink-0 z-20 relative">
+            <div class="max-w-screen-2xl mx-auto px-4 h-16 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <i class="fa-solid fa-paw text-2xl text-emerald-300"></i>
+                    <h1 class="text-xl font-bold tracking-wider">紅外線相機監測分析平台</h1>
+                </div>
+                <div v-if="step === 2" class="flex items-center gap-4 text-sm">
+                    <button @click="resetApp" class="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded-md transition font-medium">
+                        <i class="fa-solid fa-rotate-left mr-2"></i>上傳新資料表
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Message Box (Alert Alternative) -->
+        <Transition name="toast">
+            <div v-if="msg.show" class="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 px-6 py-3 rounded-lg shadow-lg text-white font-medium flex items-center gap-3"
+                 :class="msg.type === 'error' ? 'bg-red-500' : 'bg-emerald-500'">
+                <i :class="msg.type === 'error' ? 'fa-solid fa-circle-exclamation' : 'fa-solid fa-circle-check'"></i>
+                {{ msg.text }}
+            </div>
+        </Transition>
+
+        <!-- Main Content Area -->
+        <main class="flex-grow overflow-hidden relative">
+            
+            <!-- ================= STEP 1: Upload Data ================= -->
+            <div v-if="step === 1" class="h-full flex flex-col items-center justify-center p-6 bg-slate-50 relative">
+                <!-- Background Decorative -->
+                <div class="absolute inset-0 opacity-5 pointer-events-none" style="background-image: radial-gradient(#059669 1px, transparent 1px); background-size: 24px 24px;"></div>
+                
+                <div class="w-full max-w-4xl grid md:grid-cols-2 gap-8 z-10">
+                    <!-- Upload Data Table -->
+                    <div class="bg-white p-8 rounded-2xl shadow-xl border-2 border-dashed border-slate-300 transition-all duration-300 flex flex-col items-center justify-center h-80 relative"
+                         :class="{ 'drag-active': isDraggingData }"
+                         @dragover.prevent="isDraggingData = true"
+                         @dragleave.prevent="isDraggingData = false"
+                         @drop.prevent="handleDrop($event, 'data')">
+                        <input type="file" id="dataFile" class="hidden" accept=".csv, .xlsx, .xls" @change="handleFileSelect($event, 'data')">
+                        <div class="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-4 shadow-inner">
+                            <i class="fa-solid fa-table-list text-3xl"></i>
+                        </div>
+                        <h2 class="text-xl font-bold mb-2">上傳資料表</h2>
+                        <p class="text-slate-500 text-center mb-6 text-sm">拖曳 CSV/Excel 檔案至此，<br>或點擊選擇檔案</p>
+                        <button @click="triggerFileInput('dataFile')" class="px-6 py-2.5 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-md">選擇檔案</button>
+                        
+                        <!-- File Status -->
+                        <div v-if="files.data" class="absolute bottom-4 left-0 w-full text-center text-emerald-600 font-medium text-sm flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-check-circle"></i> {{ files.data.name }}
+                        </div>
+                    </div>
+
+                    <!-- Upload Species List -->
+                    <div class="bg-white p-8 rounded-2xl shadow-xl border-2 border-dashed border-slate-300 transition-all duration-300 flex flex-col items-center justify-center h-80 relative"
+                         :class="{ 'drag-active': isDraggingSpecies }"
+                         @dragover.prevent="isDraggingSpecies = true"
+                         @dragleave.prevent="isDraggingSpecies = false"
+                         @drop.prevent="handleDrop($event, 'species')">
+                        <input type="file" id="speciesFile" class="hidden" accept=".csv, .xlsx, .xls" @change="handleFileSelect($event, 'species')">
+                        <div class="w-20 h-20 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4 shadow-inner">
+                            <i class="fa-solid fa-clipboard-list text-3xl"></i>
+                        </div>
+                        <h2 class="text-xl font-bold mb-2">上傳物種名錄</h2>
+                        <p class="text-slate-500 text-center mb-6 text-sm">拖曳 CSV/Excel 檔案至此，<br>或點擊選擇檔案</p>
+                        <button @click="triggerFileInput('speciesFile')" class="px-6 py-2.5 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition shadow-md">選擇檔案</button>
+                        
+                        <!-- File Status -->
+                        <div v-if="files.species" class="absolute bottom-4 left-0 w-full text-center text-blue-600 font-medium text-sm flex items-center justify-center gap-2">
+                            <i class="fa-solid fa-check-circle"></i> {{ files.species.name }}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="mt-12 z-10">
+                    <button @click="processFiles" :disabled="!files.data || !files.species" 
+                            class="px-10 py-4 rounded-full font-bold text-lg shadow-lg transition transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+                            :class="files.data && files.species ? 'bg-emerald-500 hover:bg-emerald-400 text-white' : 'bg-slate-300 text-slate-500'">
+                        <i class="fa-solid fa-microchip mr-2"></i> 執行資料清理與背景計算
+                    </button>
+                </div>
+            </div>
+
+            <!-- ================= STEP 2: Dashboard ================= -->
+            <div v-if="step === 2" class="h-full flex flex-col bg-slate-100 custom-scrollbar overflow-y-auto">
+                
+                <!-- Dashboard Header (Filters & Summary) -->
+                <div class="bg-white border-b px-6 py-4 shadow-sm z-10 flex-shrink-0">
+                    <!-- Global Settings -->
+                    <div class="flex flex-wrap items-end gap-6 mb-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 mb-1">開始日期 (YYYY,MM)</label>
+                            <input type="text" v-model="filterSettings.startMonth" placeholder="例: 2026,01" class="px-3 py-1.5 border rounded-md text-sm w-32 focus:outline-none focus:border-emerald-500">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 mb-1">結束日期 (YYYY,MM)</label>
+                            <input type="text" v-model="filterSettings.endMonth" placeholder="例: 2026,12" class="px-3 py-1.5 border rounded-md text-sm w-32 focus:outline-none focus:border-emerald-500">
+                        </div>
+                        <button @click="recalculateAll" class="px-4 py-1.5 bg-slate-800 text-white text-sm rounded-md hover:bg-slate-700 transition shadow">
+                            <i class="fa-solid fa-calculator mr-1"></i> 重新分析
+                        </button>
+                    </div>
+
+                    <!-- Summary Stats -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div class="bg-emerald-50 rounded-lg p-4 border border-emerald-100 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p class="text-emerald-700 text-xs font-bold mb-1">總觀測點位</p>
+                                <p class="text-2xl font-black text-emerald-900">{{ summary.totalPoints }}</p>
+                            </div>
+                            <i class="fa-solid fa-location-dot text-3xl text-emerald-200"></i>
+                        </div>
+                        <div class="bg-blue-50 rounded-lg p-4 border border-blue-100 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p class="text-blue-700 text-xs font-bold mb-1">偵測物種數</p>
+                                <p class="text-2xl font-black text-blue-900">{{ summary.totalSpecies }}</p>
+                            </div>
+                            <i class="fa-solid fa-frog text-3xl text-blue-200"></i>
+                        </div>
+                        <div class="bg-amber-50 rounded-lg p-4 border border-amber-100 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p class="text-amber-700 text-xs font-bold mb-1">有效照片數 (筆)</p>
+                                <p class="text-2xl font-black text-amber-900">{{ summary.validPhotos.toLocaleString() }}</p>
+                            </div>
+                            <i class="fa-solid fa-camera text-3xl text-amber-200"></i>
+                        </div>
+                        <div class="bg-purple-50 rounded-lg p-4 border border-purple-100 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p class="text-purple-700 text-xs font-bold mb-1">有效工作時 (小時)</p>
+                                <p class="text-2xl font-black text-purple-900">{{ summary.workingHours.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:1}) }}</p>
+                            </div>
+                            <i class="fa-solid fa-clock text-3xl text-purple-200"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tabs -->
+                <div class="px-6 py-2 bg-slate-200 flex gap-2 overflow-x-auto flex-shrink-0">
+                    <button v-for="tab in tabs" :key="tab.id" @click="currentTab = tab.id"
+                            class="px-5 py-2 rounded-t-lg font-semibold text-sm transition-colors border-b-2"
+                            :class="currentTab === tab.id ? 'bg-white text-emerald-700 border-emerald-500 shadow-sm' : 'text-slate-600 border-transparent hover:bg-slate-300'">
+                        {{ tab.name }}
+                    </button>
+                </div>
+
+                <!-- Content Area -->
+                <div class="p-6 flex-grow overflow-y-auto">
+                    
+                    <!-- TAB 1: 相機篩選及分布 -->
+                    <div v-show="currentTab === 'camera_dist'" class="h-full flex flex-col gap-4">
+                        <!-- Top Map -->
+                        <div class="bg-white rounded-xl shadow-md border overflow-hidden h-[400px] flex-shrink-0 relative">
+                            <div id="main-map" class="w-full h-full z-0"></div>
+                            <!-- Layer Control Hint -->
+                            <div class="absolute top-2 right-14 bg-white/90 px-2 py-1 rounded text-xs shadow pointer-events-none z-[1000]">
+                                <i class="fa-solid fa-layer-group"></i> 可切換底圖
+                            </div>
+                        </div>
+
+                        <!-- Camera Filter Box -->
+                        <div class="bg-white rounded-xl shadow-md border flex-grow flex flex-col">
+                            <div class="bg-slate-100 px-4 py-3 border-b flex justify-between items-center cursor-pointer" @click="cameraPanelExpanded = !cameraPanelExpanded">
+                                <h3 class="font-bold text-slate-700"><i class="fa-solid fa-filter mr-2"></i>相機編號篩選區塊</h3>
+                                <i class="fa-solid transition-transform" :class="cameraPanelExpanded ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                            </div>
+                            
+                            <div v-show="cameraPanelExpanded" class="p-4 flex gap-6 min-h-[400px]">
+                                <!-- Left: 分區計算 (Zone Calculation) -->
+                                <div class="w-1/3 flex flex-col border rounded-lg overflow-hidden transition-all" :class="calcMode === 'zone' ? 'bg-white ring-2 ring-emerald-500' : 'bg-slate-50 opacity-70'">
+                                    <div class="p-3 border-b bg-slate-100 flex items-center justify-between">
+                                        <label class="flex items-center font-bold cursor-pointer">
+                                            <input type="radio" v-model="calcMode" value="zone" class="mr-2 text-emerald-600 focus:ring-emerald-500"> 分區計算
+                                        </label>
+                                        <button v-if="calcMode === 'zone'" @click="addGroup" class="text-xs bg-emerald-100 text-emerald-700 px-2 py-1 rounded hover:bg-emerald-200">
+                                            <i class="fa-solid fa-plus mr-1"></i>新增群組
+                                        </button>
+                                    </div>
+                                    <div class="p-3 flex-grow overflow-y-auto custom-scrollbar"
+                                         @dragover.prevent @drop="onDropToZone($event, null)">
+                                        <p v-if="calcMode !== 'zone'" class="text-sm text-slate-400 text-center mt-10">點選啟用分區計算</p>
+                                        
+                                        <!-- Group List -->
+                                        <div v-if="calcMode === 'zone'">
+                                            <div v-for="group in zones" :key="group.id" class="mb-3 border rounded border-emerald-200 shadow-sm">
+                                                <div class="bg-emerald-50 px-2 py-1.5 border-b border-emerald-100 flex items-center justify-between">
+                                                    <div class="flex items-center gap-2 flex-grow">
+                                                        <input type="color" v-model="group.color" class="w-5 h-5 rounded cursor-pointer border-0 p-0" title="更改顏色">
+                                                        <input type="text" v-model="group.name" class="bg-transparent font-bold text-sm w-full outline-none focus:border-b focus:border-emerald-300">
+                                                    </div>
+                                                    <button @click="removeGroup(group.id)" class="text-red-400 hover:text-red-600 text-xs ml-2"><i class="fa-solid fa-xmark"></i></button>
+                                                </div>
+                                                <div class="min-h-[40px] p-2 bg-white text-sm"
+                                                     @dragover.prevent @drop.stop="onDropToZone($event, group.id)">
+                                                    <div v-if="group.cameras.length === 0" class="text-slate-300 text-xs italic text-center py-2">拖曳相機至此處</div>
+                                                    <div v-for="cam in group.cameras" :key="cam" draggable="true" @dragstart="onDragStart($event, cam, group.id)"
+                                                         class="inline-block bg-slate-100 border px-2 py-1 rounded text-xs mr-1 mb-1 cursor-move hover:bg-slate-200">
+                                                        {{ cam }}
+                                                        <i class="fa-solid fa-times text-slate-400 ml-1 cursor-pointer hover:text-red-500" @click="removeCamFromGroup(group.id, cam)"></i>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Right: 個別計算 (Individual Calculation) Tree View -->
+                                <div class="w-2/3 flex flex-col border rounded-lg overflow-hidden transition-all" :class="calcMode === 'individual' ? 'bg-white ring-2 ring-blue-500' : 'bg-white'">
+                                    <div class="p-3 border-b bg-slate-100 flex items-center justify-between">
+                                        <label class="flex items-center font-bold cursor-pointer">
+                                            <input type="radio" v-model="calcMode" value="individual" class="mr-2 text-blue-600 focus:ring-blue-500"> 個別計算 (點位庫)
+                                        </label>
+                                        <div class="flex gap-2">
+                                            <button @click="batchImportToZone" v-if="calcMode === 'zone' && zones.length > 0" class="text-xs bg-emerald-600 text-white px-3 py-1 rounded shadow hover:bg-emerald-500">
+                                                <i class="fa-solid fa-file-import mr-1"></i>批次匯入至選定群組
+                                            </button>
+                                            <select v-if="calcMode === 'zone'" v-model="targetZoneForBatch" class="text-xs border rounded px-1">
+                                                <option v-for="z in zones" :value="z.id">{{ z.name }}</option>
+                                            </select>
+                                            <button @click="toggleSelectAllCameras" class="text-xs bg-slate-200 px-3 py-1 rounded shadow hover:bg-slate-300">
+                                                {{ isAllSelected ? '取消選取' : '全部選取' }}
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <div class="p-4 flex-grow overflow-y-auto custom-scrollbar text-sm">
+                                        <!-- Recursive Tree Rendering Simulation -->
+                                        <div v-for="node in filteredCameraTree" :key="node.id" class="mb-1">
+                                            <div class="flex items-center hover:bg-slate-50 py-0.5 rounded cursor-pointer" :style="{ paddingLeft: (node.level * 1.5) + 'rem' }">
+                                                <input type="checkbox" :checked="node.checked" @change="toggleNode(node)" class="mr-2 w-3.5 h-3.5 text-blue-600 rounded cursor-pointer">
+                                                <span class="flex-grow flex items-center gap-1" @click="node.expanded = !node.expanded">
+                                                    <i v-if="node.hasChildren" class="fa-solid text-slate-400 text-xs w-3" :class="node.expanded ? 'fa-minus' : 'fa-plus'"></i>
+                                                    <span v-else class="w-3"></span>
+                                                    <span class="font-medium" :class="node.level === 0 ? 'text-slate-800' : 'text-slate-600'">{{ node.displayLabel }}</span>
+                                                </span>
+                                                <!-- Draggable Handle -->
+                                                <div v-if="calcMode === 'zone' && node.isLeaf" draggable="true" @dragstart="onDragStart($event, node.label, 'source')" class="ml-2 cursor-move text-slate-400 hover:text-emerald-500">
+                                                    <i class="fa-solid fa-grip-vertical"></i>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="p-3 bg-slate-50 border-t flex justify-center">
+                                <button @click="applyCameraFilters" class="px-8 py-2 bg-slate-800 text-white font-bold rounded shadow hover:bg-slate-700 transition">
+                                    進行分析 (更新地圖與數據)
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 2: 相機工作時 -->
+                    <div v-show="currentTab === 'working_hours'" class="h-full flex flex-col">
+                        <div class="bg-white rounded-xl shadow-md border p-6 flex-grow overflow-hidden flex flex-col">
+                            <h2 class="text-xl font-bold mb-4 text-slate-800 border-b pb-2"><i class="fa-solid fa-clock mr-2 text-purple-500"></i>相機有效工作時數計算 (T)</h2>
+                            <p class="text-sm text-slate-500 mb-4">依據「起始日期時間」與「結束日期時間」相減所得。目前顯示模式：<span class="font-bold text-emerald-600">{{ calcMode === 'zone' ? '分區計算' : '個別計算 (地點編號)' }}</span></p>
+                            
+                            <div class="overflow-y-auto flex-grow custom-scrollbar border rounded">
+                                <table class="w-full text-left text-sm whitespace-nowrap">
+                                    <thead class="bg-slate-100 sticky top-0 z-10">
+                                        <tr>
+                                            <th class="p-3 font-semibold">{{ calcMode === 'zone' ? '群組名稱' : '地點編號' }}</th>
+                                            <th class="p-3 font-semibold text-right">有效工作時 (總小時數 T)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y">
+                                        <tr v-for="item in workingHoursResult" :key="item.name" class="hover:bg-slate-50">
+                                            <td class="p-3 font-medium text-slate-700">
+                                                <span v-if="calcMode==='zone'" class="inline-block w-3 h-3 rounded-full mr-2" :style="{backgroundColor: item.color}"></span>
+                                                {{ item.name }}
+                                            </td>
+                                            <td class="p-3 text-right font-mono">{{ item.hours.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}) }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- TAB 3: 有效照片數及OI值 -->
+                    <div v-show="currentTab === 'oi_analysis'" class="h-full flex flex-col gap-4">
+                        
+                        <!-- OI Map Filter (獨立移出地圖外的篩選區塊) -->
+                        <div class="bg-white rounded-xl shadow-sm border p-4 flex-shrink-0 flex flex-col gap-2 relative z-30">
+                            <h3 class="text-sm font-bold text-slate-700"><i class="fa-solid fa-map-location-dot mr-2 text-emerald-600"></i>地圖物種呈現篩選 (預設僅顯示相機位置)</h3>
+                            <!-- 移除了 overflow-x-auto，改用 flex-wrap 讓標籤自然換行，避免下拉選單被裁切 -->
+                            <div class="flex flex-wrap items-start gap-3 w-full pt-1 pb-2">
+                                <!-- Searchable Dropdown (加寬與放大字體設計) -->
+                                <div class="relative shrink-0 w-80 md:w-96" @click.stop>
+                                    <div class="flex items-center bg-emerald-50 border border-emerald-200 rounded-lg px-4 py-2.5 shadow-sm cursor-pointer hover:bg-emerald-100 transition" @click="dropdownOpen = !dropdownOpen">
+                                        <span class="flex-grow text-emerald-900 font-bold text-base truncate">{{ speciesSearchQuery || '請選擇物種以顯示於地圖...' }}</span>
+                                        <i class="fa-solid fa-chevron-down text-emerald-600 text-sm ml-2"></i>
+                                    </div>
+                                    
+                                    <div v-if="dropdownOpen" class="absolute top-full left-0 w-full mt-1 bg-white border border-emerald-200 rounded-lg shadow-2xl max-h-[400px] overflow-y-auto z-[1050] text-base">
+                                        <div class="p-2 border-b sticky top-0 bg-white">
+                                            <input type="text" v-model="speciesSearchQuery" class="w-full border rounded px-3 py-2 text-base focus:outline-none focus:ring-2 focus:ring-emerald-500" placeholder="輸入中文搜尋物種...">
+                                        </div>
+                                        <div v-for="sp in filteredDropdownSpecies" :key="sp.name" @click="addSpeciesToMap(sp)" class="px-4 py-2.5 hover:bg-emerald-50 cursor-pointer border-b last:border-b-0 flex items-center justify-between" :class="{'bg-emerald-100 font-bold text-emerald-800': isSpeciesOnMap(sp.name)}">
+                                            <span class="truncate">{{ sp.name }}</span>
+                                            <i v-if="isSpeciesOnMap(sp.name)" class="fa-solid fa-check text-emerald-600"></i>
+                                        </div>
+                                        <div v-if="filteredDropdownSpecies.length === 0" class="px-4 py-4 text-slate-400 italic text-center text-sm">無符合物種資料</div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Selected Pills -->
+                                <div class="flex flex-wrap gap-2 items-center min-h-[44px]">
+                                    <div v-for="sp in activeMapSpecies" :key="sp.name" class="flex items-center gap-2 bg-white border border-slate-200 shadow-sm rounded-full px-3 py-1.5 text-sm font-bold text-slate-700 whitespace-nowrap animate-fade-in">
+                                        <span class="w-3.5 h-3.5 rounded-full shadow-inner" :style="{backgroundColor: sp.color}"></span>
+                                        <span>{{ sp.name }}</span>
+                                        <button @click="removeSpeciesFromMap(sp.name)" class="text-slate-400 hover:text-red-500 ml-1 focus:outline-none transition-colors" title="從地圖移除"><i class="fa-solid fa-xmark"></i></button>
+                                    </div>
+                                    <div v-if="activeMapSpecies.length === 0" class="text-xs text-slate-400 italic py-1">
+                                        目前尚未選擇任何物種
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- OI Result Map -->
+                        <div class="bg-white rounded-xl shadow-md border overflow-hidden h-[360px] flex-shrink-0 relative z-10">
+                            <div id="oi-map" class="w-full h-full z-0"></div>
+                        </div>
+
+                        <!-- Analysis Settings -->
+                        <div class="bg-white rounded-xl shadow-md border p-4 flex-shrink-0">
+                            <div class="flex gap-6 items-start">
+                                <div class="w-1/4 border-r pr-4">
+                                    <h3 class="font-bold text-slate-700 mb-3 text-sm">1. 篩選方法</h3>
+                                    <select v-model="validPhotoMethod" class="w-full border rounded p-2 text-sm focus:ring-emerald-500">
+                                        <option value="count">依有效照片數分析</option>
+                                        <option value="interval" disabled>依1小時間隔分析 (建置中)</option>
+                                    </select>
+                                </div>
+                                <div class="w-3/4">
+                                    <h3 class="font-bold text-slate-700 mb-3 text-sm flex justify-between items-center">
+                                        <span>2. 物種選取 (個體/以群計算)</span>
+                                        <div class="flex items-center gap-3">
+                                            <span class="text-xs text-red-500 font-bold"><i class="fa-solid fa-circle-info"></i> 紅色字體代表雙重計算</span>
+                                            <button @click="analyzeOI" class="bg-amber-500 hover:bg-amber-400 text-white px-5 py-1.5 rounded shadow-md text-sm font-bold transition">執行分析</button>
+                                        </div>
+                                    </h3>
+                                    
+                                    <div class="flex gap-4 h-[250px]">
+                                        <!-- Individual Calc Tree -->
+                                        <div class="flex-1 flex flex-col border border-blue-200 rounded p-2 bg-slate-50 relative"
+                                             @dragover.prevent @drop="onDropToSpeciesMode($event, 'individual')">
+                                            <div class="flex justify-between items-center mb-2 border-b pb-1">
+                                                <span class="text-xs font-bold text-blue-700">個體計算 (扣除連拍、OI殺)</span>
+                                                <span class="text-[10px] text-slate-400">Shift可多選, 拖曳可移動</span>
+                                            </div>
+                                            <div class="flex-grow overflow-y-auto custom-scrollbar bg-white border border-slate-200 p-1 rounded text-xs" @click.self="clearSelection">
+                                                <div v-if="individualSpeciesTree.length === 0" class="text-center text-slate-400 mt-4 italic">此區塊無物種</div>
+                                                <div v-for="node in individualSpeciesTree" :key="node.path + '_ind'" 
+                                                     class="flex items-center py-1.5 rounded cursor-pointer select-none transition-colors border border-transparent"
+                                                     :class="{'bg-sky-100 border-sky-300 shadow-sm': selectedSpecies.has(node.name) && node.isLeaf, 'hover:bg-slate-100': !selectedSpecies.has(node.name) || !node.isLeaf}"
+                                                     :style="{ paddingLeft: (node.level * 1) + 'rem' }"
+                                                     @click="handleSpeciesClick($event, node, 'individual')">
+                                                    <span class="flex-grow flex items-center gap-1">
+                                                        <i v-if="node.hasChildren" class="fa-solid text-slate-400 text-[10px] w-3" :class="isTaxaExpanded(node.path) ? 'fa-minus' : 'fa-plus'"></i>
+                                                        <span v-else class="w-3 text-slate-300"><i class="fa-solid fa-leaf text-[8px]"></i></span>
+                                                        <span class="truncate" :class="getNodeTextClass(node)" :title="node.label">{{ node.label }}</span>
+                                                    </span>
+                                                    <div v-if="node.isLeaf" class="flex gap-1 items-center ml-1 pr-2">
+                                                        <div draggable="true" @dragstart="onSpeciesDragStart($event, node)" class="cursor-move text-slate-400 hover:text-blue-600 p-1" title="拖曳至另一區">
+                                                            <i class="fa-solid fa-grip-vertical"></i>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Group Calc Tree -->
+                                        <div class="flex-1 flex flex-col border border-emerald-200 rounded p-2 bg-slate-50 relative"
+                                             @dragover.prevent @drop="onDropToSpeciesMode($event, 'group')">
+                                            <div class="flex justify-between items-center mb-2 border-b pb-1">
+                                                <span class="text-xs font-bold text-emerald-700">以群計算 (扣除連拍、同群、OI殺)</span>
+                                                <span class="text-[10px] text-slate-400">Shift可多選, 拖曳可移動</span>
+                                            </div>
+                                            <div class="flex-grow overflow-y-auto custom-scrollbar bg-white border border-slate-200 p-1 rounded text-xs" @click.self="clearSelection">
+                                                <div v-if="groupSpeciesTree.length === 0" class="text-center text-slate-400 mt-4 italic">此區塊無物種</div>
+                                                <div v-for="node in groupSpeciesTree" :key="node.path + '_grp'" 
+                                                     class="flex items-center py-1.5 rounded cursor-pointer select-none transition-colors border border-transparent"
+                                                     :class="{'bg-sky-100 border-sky-300 shadow-sm': selectedSpecies.has(node.name) && node.isLeaf, 'hover:bg-slate-100': !selectedSpecies.has(node.name) || !node.isLeaf}"
+                                                     :style="{ paddingLeft: (node.level * 1) + 'rem' }"
+                                                     @click="handleSpeciesClick($event, node, 'group')">
+                                                    <span class="flex-grow flex items-center gap-1">
+                                                        <i v-if="node.hasChildren" class="fa-solid text-slate-400 text-[10px] w-3" :class="isTaxaExpanded(node.path) ? 'fa-minus' : 'fa-plus'"></i>
+                                                        <span v-else class="w-3 text-slate-300"><i class="fa-solid fa-leaf text-[8px]"></i></span>
+                                                        <span class="truncate" :class="getNodeTextClass(node)" :title="node.label">{{ node.label }}</span>
+                                                    </span>
+                                                    <div v-if="node.isLeaf" class="flex gap-1 items-center ml-1 pr-2">
+                                                        <div draggable="true" @dragstart="onSpeciesDragStart($event, node)" class="cursor-move text-slate-400 hover:text-emerald-600 p-1" title="拖曳至另一區">
+                                                            <i class="fa-solid fa-grip-vertical"></i>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Bottom Action Buttons -->
+                                    <div class="mt-3 flex items-center justify-center gap-3 relative">
+                                        <button @click="setSelectionToBoth" class="bg-white hover:bg-indigo-50 text-indigo-700 border border-indigo-200 px-4 py-1.5 rounded shadow-sm font-bold text-sm transition">
+                                            <i class="fa-solid fa-arrows-split-up-and-left mr-1"></i>雙重計算
+                                        </button>
+                                        <button @click="removeSelection" class="bg-white hover:bg-red-50 text-red-600 border border-red-200 px-4 py-1.5 rounded shadow-sm font-bold text-sm transition">
+                                            <i class="fa-solid fa-trash-can mr-1"></i>刪除物種
+                                        </button>
+                                        <div class="relative">
+                                            <button @click.stop="showAddSpeciesDropdown = !showAddSpeciesDropdown" 
+                                                    :disabled="excludedSpeciesList.length === 0"
+                                                    class="bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-200 px-4 py-1.5 rounded shadow-sm font-bold text-sm transition disabled:opacity-50 disabled:cursor-not-allowed">
+                                                <i class="fa-solid fa-plus mr-1"></i>新增物種
+                                            </button>
+                                            <!-- Add Species Dropdown -->
+                                            <div v-if="showAddSpeciesDropdown" @click.stop class="absolute bottom-full mb-1 left-0 w-48 bg-white border border-slate-200 rounded-lg shadow-lg z-50 max-h-48 overflow-y-auto custom-scrollbar">
+                                                <div v-for="sp in excludedSpeciesList" :key="sp" @click="restoreSpecies(sp)" class="px-3 py-2 hover:bg-emerald-50 cursor-pointer border-b last:border-b-0 text-sm font-medium text-slate-700">
+                                                    {{ sp }}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Data Table & Export -->
+                        <div class="bg-white rounded-xl shadow-md border flex-grow flex flex-col overflow-hidden min-h-[300px]">
+                            <div class="px-4 py-3 border-b flex justify-between items-center bg-slate-50">
+                                <div>
+                                    <h3 class="font-bold text-slate-700"><i class="fa-solid fa-table border-r pr-2 mr-2"></i>分析結果</h3>
+                                    <p class="text-[10px] text-slate-500 mt-1">OI值定義：每 1000 個相機工作小時所拍到的有效紀錄。公式：OI = (有效照片數 n / 工作時 T) × 1000</p>
+                                </div>
+                                <button @click="exportResults" class="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg text-sm font-bold shadow transition flex items-center">
+                                    <i class="fa-solid fa-file-excel mr-2"></i> 匯出分析結果 (Excel)
+                                </button>
+                            </div>
+                            <div class="flex-grow overflow-auto custom-scrollbar p-0">
+                                <table class="w-full text-left text-sm whitespace-nowrap">
+                                    <thead class="bg-slate-200 sticky top-0 z-10 shadow-sm">
+                                        <tr>
+                                            <th class="p-3 font-semibold">{{ calcMode === 'zone' ? '群組' : '地點編號' }}</th>
+                                            <th class="p-3 font-semibold">物種名稱</th>
+                                            <th class="p-3 font-semibold">分類階層 (綱-目-科)</th>
+                                            <th class="p-3 font-semibold">計算方式</th>
+                                            <th class="p-3 font-semibold text-right">有效照片數 (n)</th>
+                                            <th class="p-3 font-semibold text-right">OI 值</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y">
+                                        <tr v-if="oiResults.length === 0">
+                                            <td colspan="6" class="p-8 text-center text-slate-400 italic">請在上方選擇物種並點擊「執行分析」</td>
+                                        </tr>
+                                        <tr v-for="(row, idx) in oiResults" :key="idx" class="hover:bg-amber-50">
+                                            <td class="p-3 font-medium">{{ row.location }}</td>
+                                            <td class="p-3">{{ row.species }}</td>
+                                            <td class="p-3 text-xs text-slate-500">{{ row.taxonomy }}</td>
+                                            <td class="p-3 text-xs">
+                                                <span :class="row.method === '個體' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'" class="px-2 py-0.5 rounded">
+                                                    {{ row.method }}
+                                                </span>
+                                            </td>
+                                            <td class="p-3 text-right font-mono">{{ row.validPhotos }}</td>
+                                            <td class="p-3 text-right font-mono font-bold text-slate-800">{{ row.oi }}</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const { createApp, ref, reactive, computed, onMounted, nextTick, watch } = Vue;
+
+        createApp({
+            setup() {
+                // Application State
+                const step = ref(1);
+                const msg = reactive({ show: false, text: '', type: 'success' });
+                
+                // File Upload State
+                const isDraggingData = ref(false);
+                const isDraggingSpecies = ref(false);
+                const files = reactive({ data: null, species: null });
+                
+                // Data Storage
+                const rawData = ref([]);
+                const speciesList = ref([]);
+                const taxonomySortedSpecies = ref([]);
+                
+                // Dashboard Settings
+                const filterSettings = reactive({ startMonth: '', endMonth: '' });
+                const currentTab = ref('camera_dist');
+                const tabs = [
+                    { id: 'camera_dist', name: '相機篩選及分布', icon: 'fa-map-location-dot' },
+                    { id: 'working_hours', name: '相機工作時', icon: 'fa-clock' },
+                    { id: 'oi_analysis', name: '有效照片數及OI值', icon: 'fa-chart-line' }
+                ];
+                
+                // Camera Tree & Filtering
+                const cameraPanelExpanded = ref(true);
+                const calcMode = ref('individual'); 
+                const rawCameraNodes = ref([]); 
+                const isAllSelected = ref(true);
+                const zones = ref([]);
+                const targetZoneForBatch = ref('');
+                
+                // Maps
+                let mainMap = null;
+                let mainLayerGroup = null;
+                let oiMap = null;
+                let oiLayerGroup = null;
+                
+                // Map Filter State
+                const speciesSearchQuery = ref('');
+                const dropdownOpen = ref(false);
+                const showAddSpeciesDropdown = ref(false);
+                
+                onMounted(() => {
+                    document.addEventListener('click', () => {
+                        dropdownOpen.value = false;
+                        showAddSpeciesDropdown.value = false;
+                    });
+                });
+                
+                // Analysis State
+                const validPhotoMethod = ref('count');
+                const speciesAssignments = reactive({}); 
+                const collapsedTaxa = ref(new Set()); 
+                
+                // Selection State for Tree
+                const selectedSpecies = ref(new Set());
+                const lastSelectedNode = ref(null);
+                
+                const workingHoursResult = ref([]);
+                const oiResults = ref([]);
+                const uniqueSpeciesInMap = ref([]);
+
+                // Proj4 Defs
+                if (typeof proj4 !== 'undefined') {
+                    proj4.defs("EPSG:3826", "+proj=tmerc +lat_0=0 +lon_0=121 +k=0.9999 +x_0=250000 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs");
+                    proj4.defs("EPSG:4326", "+proj=longlat +datum=WGS84 +no_defs");
+                }
+
+                // Utilities
+                const showMessage = (text, type = 'success') => {
+                    msg.text = text; msg.type = type; msg.show = true;
+                    setTimeout(() => msg.show = false, 3000);
+                };
+
+                const triggerFileInput = (id) => document.getElementById(id).click();
+                const handleFileSelect = (e, type) => { if(e.target.files[0]) files[type] = e.target.files[0]; };
+                const handleDrop = (e, type) => {
+                    isDraggingData.value = false; isDraggingSpecies.value = false;
+                    if(e.dataTransfer.files[0]) files[type] = e.dataTransfer.files[0];
+                };
+
+                const readWorkbook = (file) => {
+                    return new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            try {
+                                const data = new Uint8Array(e.target.result);
+                                const workbook = XLSX.read(data, {type: 'array', cellDates: true});
+                                const firstSheetName = workbook.SheetNames[0];
+                                const worksheet = workbook.Sheets[firstSheetName];
+                                const json = XLSX.utils.sheet_to_json(worksheet, {raw: false, dateNF: 'yyyy-mm-dd hh:mm:ss'});
+                                resolve(json);
+                            } catch (err) { reject(err); }
+                        };
+                        reader.readAsArrayBuffer(file);
+                    });
+                };
+
+                const processFiles = async () => {
+                    try {
+                        speciesList.value = await readWorkbook(files.species);
+                        const seqToName = {};
+
+                        taxonomySortedSpecies.value = speciesList.value.map(s => {
+                            let name = s.CHN_NAME || s['物種'] || s['中文名'] || s['中文名稱'] || s.Name || '未知';
+                            let seq = s.SEQ || s['動物代號'] || s['代號'] || s.ID || '';
+                            
+                            // 依據新版物種名錄_範例3 進行綱目科對應
+                            let cls = s.CHN_CLASS || s['綱'] || '';
+                            let order = s.CHN_ORDER || s['目'] || '';
+                            let family = s.CHN_FAMILY || s['科'] || '';
+                            
+                            // 增強代號對應：自動處理 00006、6、字串 等格式差異
+                            if (seq) {
+                                let s1 = String(seq).trim();
+                                let s2 = s1.padStart(5, '0'); // 補齊 5 碼
+                                let s3 = s1.replace(/^0+/, ''); // 拔除開頭的 0
+                                seqToName[s1] = name;
+                                seqToName[s2] = name;
+                                if(s3) seqToName[s3] = name;
+                            }
+                            seqToName[name] = name; 
+
+                            // 僅使用 綱、目、科 進行階層陣列
+                            let pathArr = [cls, order, family].filter(Boolean);
+                            let taxonomyPath = pathArr.length > 0 ? pathArr.join('/') : '未分類';
+                            return { seq, name, taxonomyPath, pathArr };
+                        }).sort((a, b) => a.taxonomyPath.localeCompare(b.taxonomyPath));
+
+                        rawData.value = await readWorkbook(files.data);
+                        let observedSpeciesSet = new Set();
+
+                        rawData.value.forEach(row => {
+                            let x = parseFloat(row.X || row.x || row['經度(X)']);
+                            let y = parseFloat(row.Y || row.y || row['緯度(Y)']);
+                            if(x && y && x > 10000 && typeof proj4 !== 'undefined') {
+                                let [lng, lat] = proj4("EPSG:3826", "EPSG:4326", [x, y]);
+                                row._lat = lat; row._lng = lng;
+                            } else if (x && y) { row._lat = y; row._lng = x; }
+                            
+                            row._pointId = row['地點編號'] || row.Point || row.Site || 'Unknown';
+                            row._rollId = row['卷底片編號'] || row['相機捲號'] || row['相機編號'] || row.Roll || row._pointId;
+                            
+                            row._consecutive = parseInt(row['連拍'] || 0) === 1 ? 1 : 0;
+                            row._group = parseInt(row['同群'] || 0) === 1 ? 1 : 0;
+                            row._oiKill = parseInt(row['OI殺'] || row['OI_kill'] || 0) === 1 ? 1 : 0;
+                            
+                            // 增強代號對應：無論原始資料是純數字還是補零字串，都能對應到
+                            let rawSp = String(row['物種'] || row['動物代號'] || row['動物代碼'] || row['Species'] || '').trim();
+                            let rawSpPad = rawSp.padStart(5, '0');
+                            let rawSpStrip = rawSp.replace(/^0+/, '');
+                            row._species = seqToName[rawSp] || seqToName[rawSpPad] || seqToName[rawSpStrip] || rawSp;
+                            
+                            if (row._species) observedSpeciesSet.add(row._species);
+                        });
+                        
+                        const groupDefaults = ["臺灣獼猴", "人", "臺灣野豬", "竹雞", "深山竹雞", "藍腹鷴"];
+                        
+                        // 只保留本次資料中有出現的物種 (過濾掉名錄上有但沒拍到的物種)
+                        taxonomySortedSpecies.value = taxonomySortedSpecies.value.filter(s => observedSpeciesSet.has(s.name));
+
+                        taxonomySortedSpecies.value.forEach(s => {
+                            speciesAssignments[s.name] = groupDefaults.includes(s.name) ? 'group' : 'individual';
+                        });
+
+                        observedSpeciesSet.forEach(name => {
+                            if (!speciesAssignments[name]) {
+                                speciesAssignments[name] = groupDefaults.includes(name) ? 'group' : 'individual';
+                                taxonomySortedSpecies.value.push({
+                                    seq: Date.now() + Math.random(),
+                                    name: name,
+                                    taxonomyPath: '未分類/未分類/未分類',
+                                    pathArr: ['未分類', '未分類', '未分類']
+                                });
+                            }
+                        });
+
+                        buildCameraTree();
+                        step.value = 2;
+                        showMessage('資料處理成功，已切換至分析面板');
+                        
+                        nextTick(() => {
+                            initMainMap();
+                            initOIMap();
+                            recalculateAll();
+                        });
+                    } catch(err) {
+                        console.error(err);
+                        showMessage('解析檔案失敗，請檢查格式', 'error');
+                    }
+                };
+
+                const buildCameraTree = () => {
+                    const uniqueRolls = [...new Set(rawData.value.map(r => r._rollId))].filter(Boolean);
+                    
+                    let treeObj = {};
+                    uniqueRolls.forEach(roll => {
+                        let point = roll.split('.')[0] || roll;
+                        let match = point.match(/^[a-zA-Z]+/);
+                        let letters = match ? match[0].toUpperCase() : 'OTHER';
+                        
+                        let L1 = letters.charAt(0);
+                        let L2 = letters;
+                        
+                        if(!treeObj[L1]) treeObj[L1] = { _c: {} };
+                        if(!treeObj[L1]._c[L2]) treeObj[L1]._c[L2] = { _c: {} };
+                        if(!treeObj[L1]._c[L2]._c[point]) treeObj[L1]._c[L2]._c[point] = { _c: {} };
+                        treeObj[L1]._c[L2]._c[point]._c[roll] = true;
+                    });
+
+                    let flat = [];
+                    let idCounter = 0;
+                    
+                    const traverse = (obj, level, parentPath) => {
+                        for(let key in obj) {
+                            if(key === '_c') continue;
+                            let nodePath = parentPath ? `${parentPath}/${key}` : key;
+                            let hasChildren = typeof obj[key] === 'object' && obj[key]._c && Object.keys(obj[key]._c).length > 0;
+                            
+                            let labelSuffix = '';
+                            if(level === 0) labelSuffix = ' (縣市)';
+                            else if(level === 1) labelSuffix = ' (鄉鎮區)';
+                            else if(level === 2) labelSuffix = ' (樣點)';
+                            else if(level === 3) labelSuffix = ' (卷)';
+                            
+                            let node = {
+                                id: idCounter++,
+                                label: key,
+                                displayLabel: key + labelSuffix,
+                                level: level,
+                                path: nodePath,
+                                checked: true,
+                                expanded: level < 2,
+                                hasChildren: hasChildren,
+                                isLeaf: !hasChildren,
+                                parentPath: parentPath
+                            };
+                            flat.push(node);
+                            if(hasChildren) traverse(obj[key]._c, level + 1, nodePath);
+                        }
+                    };
+                    traverse(treeObj, 0, '');
+                    rawCameraNodes.value = flat;
+                };
+
+                const filteredCameraTree = computed(() => {
+                    let res = [];
+                    let hiddenPaths = new Set();
+                    
+                    rawCameraNodes.value.forEach(node => {
+                        if(node.hasChildren && !node.expanded) hiddenPaths.add(node.path);
+                    });
+                    
+                    let selectedZonesLeaves = new Set();
+                    if(calcMode.value === 'zone') {
+                        zones.value.forEach(z => z.cameras.forEach(c => selectedZonesLeaves.add(c)));
+                    }
+
+                    for(let node of rawCameraNodes.value) {
+                        if(calcMode.value === 'zone' && node.isLeaf && selectedZonesLeaves.has(node.label)) continue; 
+                        
+                        let isHidden = false;
+                        for(let hp of hiddenPaths) {
+                            if(node.parentPath && (node.parentPath === hp || node.parentPath.startsWith(hp + '/'))) {
+                                isHidden = true; break;
+                            }
+                        }
+                        if(!isHidden) res.push(node);
+                    }
+                    return res;
+                });
+
+                const toggleNode = (node) => {
+                    let newVal = !node.checked;
+                    node.checked = newVal;
+                    rawCameraNodes.value.forEach(n => {
+                        if(n.path.startsWith(node.path + '/')) n.checked = newVal;
+                    });
+                    updateMapMarkers();
+                };
+
+                const toggleSelectAllCameras = () => {
+                    isAllSelected.value = !isAllSelected.value;
+                    rawCameraNodes.value.forEach(n => n.checked = isAllSelected.value);
+                    updateMapMarkers();
+                };
+
+                const getActiveLeaves = () => {
+                    if (calcMode.value === 'zone') {
+                        let leaves = [];
+                        zones.value.forEach(z => leaves.push(...z.cameras));
+                        return leaves;
+                    }
+                    return rawCameraNodes.value.filter(n => n.isLeaf && n.checked).map(n => n.label);
+                };
+
+                const addGroup = () => {
+                    let id = 'g_' + Date.now();
+                    let colors = ['#f43f5e', '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6'];
+                    let color = colors[zones.value.length % colors.length];
+                    zones.value.push({ id, name: `群組 ${zones.value.length + 1}`, cameras: [], color });
+                    if(!targetZoneForBatch.value) targetZoneForBatch.value = id;
+                };
+
+                const removeGroup = (id) => { zones.value = zones.value.filter(z => z.id !== id); };
+                const removeCamFromGroup = (groupId, cam) => {
+                    let g = zones.value.find(z => z.id === groupId);
+                    if(g) g.cameras = g.cameras.filter(c => c !== cam);
+                };
+
+                const batchImportToZone = () => {
+                    let target = zones.value.find(z => z.id === targetZoneForBatch.value);
+                    if(!target) return showMessage('請先建立並選擇群組', 'error');
+                    let leaves = rawCameraNodes.value.filter(n => n.isLeaf && n.checked).map(n => n.label);
+                    let toAdd = leaves.filter(l => !zones.value.some(z => z.cameras.includes(l)));
+                    target.cameras.push(...toAdd);
+                    showMessage(`已批次匯入 ${toAdd.length} 筆點位`);
+                    updateMapMarkers();
+                };
+
+                const onDragStart = (e, cam, source) => {
+                    e.dataTransfer.setData('text/plain', JSON.stringify({cam, source}));
+                };
+                const onDropToZone = (e, groupId) => {
+                    try {
+                        let {cam, source} = JSON.parse(e.dataTransfer.getData('text/plain'));
+                        if(source && source.startsWith('g_')) removeCamFromGroup(source, cam);
+                        if(groupId) {
+                            let g = zones.value.find(z => z.id === groupId);
+                            if(g && !g.cameras.includes(cam)) {
+                                zones.value.forEach(z => { z.cameras = z.cameras.filter(c => c !== cam); });
+                                g.cameras.push(cam);
+                            }
+                        } else if(source && source.startsWith('g_')) {
+                             removeCamFromGroup(source, cam);
+                        }
+                        updateMapMarkers();
+                    } catch(err) {}
+                };
+
+                const initMainMap = () => {
+                    if(mainMap) mainMap.remove();
+                    mainMap = L.map('main-map').setView([23.7, 121], 7);
+                    let osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 });
+                    let sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 });
+                    let topo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17 });
+                    sat.addTo(mainMap); 
+                    L.control.layers({"衛星圖": sat, "地形圖": topo, "一般地圖": osm}).addTo(mainMap);
+                    mainLayerGroup = L.featureGroup().addTo(mainMap);
+                };
+
+                const updateMapMarkers = () => {
+                    if(!mainLayerGroup) return;
+                    mainLayerGroup.clearLayers();
+                    let activeLeaves = getActiveLeaves();
+                    let pointsToMap = {}; 
+
+                    rawData.value.forEach(row => {
+                        if(activeLeaves.includes(row._rollId) && row._lat && row._lng) {
+                            let pid = row._pointId;
+                            if(!pointsToMap[pid]) {
+                                let color = '#ef4444'; 
+                                if(calcMode.value === 'zone') {
+                                    let group = zones.value.find(z => z.cameras.includes(row._rollId));
+                                    if(group) color = group.color;
+                                }
+                                pointsToMap[pid] = { lat: row._lat, lng: row._lng, color, id: pid };
+                            }
+                        }
+                    });
+
+                    Object.values(pointsToMap).forEach(pt => {
+                        L.circleMarker([pt.lat, pt.lng], { radius: 6, fillColor: pt.color, color: '#fff', weight: 1, fillOpacity: 0.8 })
+                         .bindTooltip(`<b>樣點編號:</b> ${pt.id}`)
+                         .addTo(mainLayerGroup);
+                    });
+                    if(Object.keys(pointsToMap).length > 0) mainMap.fitBounds(mainLayerGroup.getBounds(), {padding: [30, 30]});
+                };
+                
+                const applyCameraFilters = () => {
+                    updateMapMarkers();
+                    recalculateAll();
+                    showMessage('已套用篩選並更新數據與地圖');
+                };
+
+                const recalculateAll = () => {
+                    let activeLeaves = getActiveLeaves();
+                    let startFilter = filterSettings.startMonth ? new Date(filterSettings.startMonth.replace(',', '-')) : null;
+                    let endFilter = filterSettings.endMonth ? new Date(filterSettings.endMonth.replace(',', '-')) : null;
+                    
+                    let filteredData = rawData.value.filter(r => {
+                        if(!activeLeaves.includes(r._rollId)) return false;
+                        let rd = new Date(r['起始日期'] || r.Date || r.DateTime);
+                        if(startFilter && rd < startFilter) return false;
+                        if(endFilter && rd > endFilter) return false;
+                        return true;
+                    });
+
+                    summary.totalPoints = new Set(filteredData.map(r => r._pointId)).size;
+                    let specSet = new Set();
+                    filteredData.forEach(r => { if(r._species) specSet.add(r._species); });
+                    summary.totalSpecies = specSet.size;
+
+                    calculateWorkingHours(filteredData);
+                    if(oiResults.value.length > 0) analyzeOI();
+                };
+
+                const calculateWorkingHours = (data) => {
+                    let grouped = {};
+                    let rollData = {};
+                    data.forEach(r => {
+                        let id = calcMode.value === 'zone' 
+                            ? (zones.value.find(z => z.cameras.includes(r._rollId))?.name || '未分類')
+                            : r._pointId;
+                        let roll = r._rollId;
+                        if(!rollData[roll]) rollData[roll] = { id, start: null, end: null, color: null };
+                        if(calcMode.value === 'zone') rollData[roll].color = zones.value.find(z => z.cameras.includes(r._rollId))?.color;
+
+                        let sDate = r['起始日期'] ? new Date(r['起始日期']).getTime() : null;
+                        let eDate = r['結束日期'] ? new Date(r['結束日期']).getTime() : null;
+                        
+                        if(sDate) rollData[roll].start = (!rollData[roll].start || sDate < rollData[roll].start) ? sDate : rollData[roll].start;
+                        if(eDate) rollData[roll].end = (!rollData[roll].end || eDate > rollData[roll].end) ? eDate : rollData[roll].end;
+                    });
+
+                    let totalHrs = 0;
+                    Object.values(rollData).forEach(rd => {
+                        if(rd.start && rd.end && rd.end > rd.start) {
+                            let hrs = (rd.end - rd.start) / (1000 * 60 * 60);
+                            if(!grouped[rd.id]) grouped[rd.id] = { name: rd.id, hours: 0, color: rd.color };
+                            grouped[rd.id].hours += hrs;
+                            totalHrs += hrs;
+                        }
+                    });
+
+                    workingHoursResult.value = Object.values(grouped).sort((a,b) => b.hours - a.hours);
+                    summary.workingHours = totalHrs;
+                };
+
+                const isTaxaExpanded = (path) => !collapsedTaxa.value.has(path);
+                const toggleTaxaExpansion = (path) => {
+                    if (collapsedTaxa.value.has(path)) collapsedTaxa.value.delete(path);
+                    else collapsedTaxa.value.add(path);
+                };
+
+                const buildTreeForMode = (mode) => {
+                    let treeObj = {};
+                    taxonomySortedSpecies.value.forEach(s => {
+                        if (!speciesAssignments[s.name]) return; 
+                        if (speciesAssignments[s.name] !== mode && speciesAssignments[s.name] !== 'both') return;
+                        
+                        let currentLevel = treeObj;
+                        s.pathArr.forEach(taxon => {
+                            if(!currentLevel[taxon]) currentLevel[taxon] = { _c: {} };
+                            currentLevel = currentLevel[taxon]._c;
+                        });
+                        currentLevel[s.name] = { _isLeaf: true, name: s.name };
+                    });
+
+                    let flat = [];
+                    const traverse = (obj, level, parentPath) => {
+                        for(let key in obj) {
+                            if (key === '_c') continue;
+                            let nodePath = parentPath ? `${parentPath}/${key}` : key;
+                            let isLeaf = obj[key]._isLeaf;
+                            let hasChildren = !isLeaf && Object.keys(obj[key]._c).length > 0;
+                            
+                            flat.push({
+                                label: key, level: level, path: nodePath,
+                                isLeaf: isLeaf, hasChildren: hasChildren,
+                                name: isLeaf ? obj[key].name : null, mode: mode
+                            });
+                            if (hasChildren) traverse(obj[key]._c, level + 1, nodePath);
+                        }
+                    };
+                    traverse(treeObj, 0, '');
+                    
+                    let res = [];
+                    let hiddenPaths = new Set();
+                    for(let node of flat) {
+                        if(node.hasChildren && !isTaxaExpanded(node.path)) hiddenPaths.add(node.path);
+                        let isHidden = false;
+                        for(let hp of hiddenPaths) {
+                            if (node.path !== hp && node.path.startsWith(hp + '/')) { isHidden = true; break; }
+                        }
+                        if(!isHidden) res.push(node);
+                    }
+                    return res;
+                };
+
+                const individualSpeciesTree = computed(() => buildTreeForMode('individual'));
+                const groupSpeciesTree = computed(() => buildTreeForMode('group'));
+
+                // --- Selection & Multi-select Logic ---
+                const clearSelection = () => {
+                    selectedSpecies.value.clear();
+                    lastSelectedNode.value = null;
+                };
+
+                const handleSpeciesClick = (e, node, mode) => {
+                    if (!node.isLeaf) {
+                        toggleTaxaExpansion(node.path);
+                        return;
+                    }
+                    
+                    if (e.shiftKey && lastSelectedNode.value && lastSelectedNode.value.mode === mode) {
+                        // Range selection
+                        const list = mode === 'individual' ? individualSpeciesTree.value : groupSpeciesTree.value;
+                        const leafList = list.filter(n => n.isLeaf);
+                        const idx1 = leafList.findIndex(n => n.name === lastSelectedNode.value.name);
+                        const idx2 = leafList.findIndex(n => n.name === node.name);
+                        if (idx1 !== -1 && idx2 !== -1) {
+                            const start = Math.min(idx1, idx2);
+                            const end = Math.max(idx1, idx2);
+                            // Do not clear, just add to selection to mimic standard multi-select
+                            for (let i = start; i <= end; i++) {
+                                selectedSpecies.value.add(leafList[i].name);
+                            }
+                        }
+                    } else if (e.ctrlKey || e.metaKey) {
+                        // Toggle individual
+                        if (selectedSpecies.value.has(node.name)) {
+                            selectedSpecies.value.delete(node.name);
+                        } else {
+                            selectedSpecies.value.add(node.name);
+                        }
+                        lastSelectedNode.value = node;
+                    } else {
+                        // Single select
+                        selectedSpecies.value.clear();
+                        selectedSpecies.value.add(node.name);
+                        lastSelectedNode.value = node;
+                    }
+                };
+
+                const setSelectionToBoth = () => {
+                    if(selectedSpecies.value.size === 0) return showMessage('請先點選物種', 'error');
+                    selectedSpecies.value.forEach(name => {
+                        speciesAssignments[name] = 'both';
+                    });
+                    showMessage(`已將 ${selectedSpecies.value.size} 個物種設為雙重計算`);
+                };
+
+                const removeSelection = () => {
+                    if(selectedSpecies.value.size === 0) return showMessage('請先點選物種', 'error');
+                    selectedSpecies.value.forEach(name => {
+                        speciesAssignments[name] = 'excluded';
+                    });
+                    showMessage(`已將 ${selectedSpecies.value.size} 個物種移出分析`);
+                    clearSelection();
+                };
+
+                const hasExcludedSpecies = computed(() => {
+                    return Object.values(speciesAssignments).includes('excluded');
+                });
+
+                const excludedSpeciesList = computed(() => {
+                    return Object.keys(speciesAssignments).filter(k => speciesAssignments[k] === 'excluded').sort();
+                });
+
+                const getNodeTextClass = (node) => {
+                    if (node.isLeaf) {
+                        return speciesAssignments[node.name] === 'both' 
+                            ? 'text-sm font-bold !text-red-600' 
+                            : 'text-sm font-bold text-slate-800';
+                    }
+                    // non-leaf (綱、目、科 設定不同顏色與較小字體)
+                    const colors = ['text-purple-600', 'text-blue-600', 'text-emerald-600', 'text-amber-600'];
+                    const color = colors[node.level] || 'text-slate-500';
+                    return `text-[11px] font-normal ${color}`;
+                };
+
+                const restoreExcludedSpecies = () => {
+                    const groupDefaults = ["臺灣獼猴", "人", "臺灣野豬", "竹雞", "深山竹雞", "藍腹鷴"];
+                    Object.keys(speciesAssignments).forEach(name => {
+                        if (speciesAssignments[name] === 'excluded') {
+                            speciesAssignments[name] = groupDefaults.includes(name) ? 'group' : 'individual';
+                        }
+                    });
+                    showMessage('已復原所有刪除物種');
+                };
+
+                const restoreSpecies = (name) => {
+                    const groupDefaults = ["臺灣獼猴", "人", "臺灣野豬", "竹雞", "深山竹雞", "藍腹鷴"];
+                    speciesAssignments[name] = groupDefaults.includes(name) ? 'group' : 'individual';
+                    showAddSpeciesDropdown.value = false;
+                    showMessage(`已將 ${name} 新增回分析清單`);
+                };
+
+                const onSpeciesDragStart = (e, node) => {
+                    // 若拖曳的項目不在已選清單內，就先把它設為唯一選取
+                    if (!selectedSpecies.value.has(node.name)) {
+                        selectedSpecies.value.clear();
+                        selectedSpecies.value.add(node.name);
+                        lastSelectedNode.value = node;
+                    }
+                    e.dataTransfer.setData('application/json', JSON.stringify({
+                        names: Array.from(selectedSpecies.value), 
+                        sourceMode: node.mode
+                    }));
+                };
+
+                const onDropToSpeciesMode = (e, targetMode) => {
+                    try {
+                        let data = JSON.parse(e.dataTransfer.getData('application/json'));
+                        if (!data.names || data.sourceMode === targetMode) return; 
+
+                        data.names.forEach(name => {
+                            speciesAssignments[name] = targetMode;
+                        });
+                    } catch(err) {}
+                };
+
+                const analyzeOI = () => {
+                    let activeLeaves = getActiveLeaves();
+                    let data = rawData.value.filter(r => activeLeaves.includes(r._rollId));
+                    let results = [];
+                    
+                    const getGroupId = (rollId) => {
+                        if(calcMode.value === 'individual') return rollId.split('.')[0]; 
+                        let group = zones.value.find(z => z.cameras.includes(rollId));
+                        return group ? group.name : null;
+                    };
+
+                    let taxDict = {};
+                    taxonomySortedSpecies.value.forEach(s => taxDict[s.name] = s.taxonomyPath);
+
+                    let validPhotosSum = 0;
+
+                    // 個體計算過濾 (只要在框框內即代表參與分析，不需看 speciesChecked)
+                    let indData = data.filter(r => (speciesAssignments[r._species] === 'individual' || speciesAssignments[r._species] === 'both') && 
+                                                   r._consecutive === 0 && r._oiKill === 0);
+                    let aggInd = {};
+                    indData.forEach(r => {
+                        let loc = getGroupId(r._rollId);
+                        if(!loc) return;
+                        let key = `${loc}_${r._species}_個體`;
+                        let displayTax = (taxDict[r._species] || '-').replace(/\//g, '-');
+                        if(!aggInd[key]) aggInd[key] = { location: loc, species: r._species, taxonomy: displayTax, method: '個體', validPhotos: 0, lat: r._lat, lng: r._lng };
+                        aggInd[key].validPhotos += 1;
+                        validPhotosSum++;
+                    });
+                    results.push(...Object.values(aggInd));
+
+                    // 以群計算過濾 (只要在框框內即代表參與分析，不需看 speciesChecked)
+                    let grpData = data.filter(r => (speciesAssignments[r._species] === 'group' || speciesAssignments[r._species] === 'both') && 
+                                                   r._consecutive === 0 && r._oiKill === 0 && r._group === 0);
+                    let aggGrp = {};
+                    grpData.forEach(r => {
+                        let loc = getGroupId(r._rollId);
+                        if(!loc) return;
+                        let key = `${loc}_${r._species}_群體`;
+                        let displayTax = (taxDict[r._species] || '-').replace(/\//g, '-');
+                        if(!aggGrp[key]) aggGrp[key] = { location: loc, species: r._species, taxonomy: displayTax, method: '以群', validPhotos: 0, lat: r._lat, lng: r._lng };
+                        aggGrp[key].validPhotos += 1;
+                        validPhotosSum++;
+                    });
+                    results.push(...Object.values(aggGrp));
+
+                    let tDict = {};
+                    workingHoursResult.value.forEach(w => tDict[w.name] = w.hours);
+
+                    results.forEach(res => {
+                        let T = tDict[res.location] || 0;
+                        res.oi = T > 0 ? ((res.validPhotos / T) * 1000).toFixed(2) : '0.00';
+                        res._rawOi = T > 0 ? (res.validPhotos / T) * 1000 : 0;
+                    });
+
+                    results.sort((a,b) => {
+                        if(a.location !== b.location) return a.location.localeCompare(b.location);
+                        return a.taxonomy.localeCompare(b.taxonomy);
+                    });
+
+                    oiResults.value = results;
+                    summary.validPhotos = validPhotosSum;
+                    
+                    setupOIMapData();
+                    showMessage('OI值計算完成');
+                };
+
+                const initOIMap = () => {
+                    if(oiMap) oiMap.remove();
+                    oiMap = L.map('oi-map').setView([23.7, 121], 7);
+                    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 }).addTo(oiMap);
+                    oiLayerGroup = L.featureGroup().addTo(oiMap);
+                };
+
+                const setupOIMapData = () => {
+                    let speciesMap = new Map();
+                    // 確保沒有灰色系，提供更多、對比度更高的高辨識度顏色陣列
+                    let colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075'];
+                    
+                    oiResults.value.forEach(r => {
+                        if(!speciesMap.has(r.species)) {
+                            // Default: not shown on map until user adds via dropdown
+                            speciesMap.set(r.species, { name: r.species, color: colors[speciesMap.size % colors.length], showOnMap: false });
+                        }
+                    });
+                    
+                    // Maintain visibility for previously selected items if analyzing again
+                    let previousActive = uniqueSpeciesInMap.value.filter(s => s.showOnMap).map(s => s.name);
+                    uniqueSpeciesInMap.value = Array.from(speciesMap.values()).map(s => {
+                        if(previousActive.includes(s.name)) s.showOnMap = true;
+                        return s;
+                    });
+                    
+                    updateOIMap();
+                };
+                
+                const filteredDropdownSpecies = computed(() => {
+                    if(!speciesSearchQuery.value) return uniqueSpeciesInMap.value;
+                    return uniqueSpeciesInMap.value.filter(sp => sp.name.includes(speciesSearchQuery.value));
+                });
+
+                const activeMapSpecies = computed(() => uniqueSpeciesInMap.value.filter(s => s.showOnMap));
+                const isSpeciesOnMap = (name) => { let sp = uniqueSpeciesInMap.value.find(s => s.name === name); return sp ? sp.showOnMap : false; };
+
+                const addSpeciesToMap = (sp) => {
+                    let target = uniqueSpeciesInMap.value.find(s => s.name === sp.name);
+                    if(target) target.showOnMap = true;
+                    speciesSearchQuery.value = ''; dropdownOpen.value = false; updateOIMap();
+                };
+
+                const removeSpeciesFromMap = (name) => {
+                    let target = uniqueSpeciesInMap.value.find(s => s.name === name);
+                    if(target) target.showOnMap = false;
+                    updateOIMap();
+                };
+
+                const updateOIMap = () => {
+                    if(!oiLayerGroup) return;
+                    oiLayerGroup.clearLayers();
+                    
+                    let activeSpecies = uniqueSpeciesInMap.value.filter(s => s.showOnMap).map(s => s.name);
+                    let colorDict = {};
+                    uniqueSpeciesInMap.value.forEach(s => colorDict[s.name] = s.color);
+
+                    let activeLeaves = getActiveLeaves();
+                    let pointsToMap = {};
+                    rawData.value.forEach(row => {
+                        if(activeLeaves.includes(row._rollId) && row._lat && row._lng) {
+                            let pid = calcMode.value === 'zone' 
+                                ? (zones.value.find(z => z.cameras.includes(row._rollId))?.name || '未分類')
+                                : row._pointId;
+                            if(!pointsToMap[pid]) {
+                                // 準備顯示為基底位置
+                                pointsToMap[pid] = { lat: row._lat, lng: row._lng, id: pid };
+                            }
+                        }
+                    });
+
+                    let pointsWithActiveSpecies = new Set();
+                    oiResults.value.forEach(r => {
+                        if(activeSpecies.includes(r.species) && pointsToMap[r.location]) {
+                            pointsWithActiveSpecies.add(r.location);
+                        }
+                    });
+
+                    // 1. Draw base cameras (僅當該點位「沒有」拍到所選物種時，才畫出灰色基底圓圈)
+                    Object.values(pointsToMap).forEach(pt => {
+                        if (!pointsWithActiveSpecies.has(pt.id)) {
+                            L.circleMarker([pt.lat, pt.lng], { radius: 4, fillColor: '#cbd5e1', color: '#94a3b8', weight: 1, fillOpacity: 0.4 })
+                             .bindTooltip(`<b>${calcMode.value === 'zone' ? '群組' : '樣點'}:</b> ${pt.id} <br><span class="text-xs text-slate-100 bg-slate-700 px-1 rounded inline-block mt-1">相機位置</span>`)
+                             .addTo(oiLayerGroup);
+                        }
+                    });
+
+                    // 2. Draw active species OI circles
+                    let locData = {};
+                    oiResults.value.forEach(r => {
+                        if(activeSpecies.includes(r.species) && pointsToMap[r.location]) {
+                            if(!locData[r.location]) locData[r.location] = [];
+                            locData[r.location].push(r);
+                        }
+                    });
+
+                    Object.keys(locData).forEach(loc => {
+                        let records = locData[loc];
+                        
+                        // 依照 OI 值由大到小排序，確保畫圖時小圓圈一定疊加在大圓圈之上，不會被遮擋
+                        records.sort((a, b) => b._rawOi - a._rawOi);
+                        
+                        let baseCoord = [pointsToMap[loc].lat, pointsToMap[loc].lng];
+                        
+                        records.forEach((rec) => {
+                            let radius = Math.max(8, Math.min(40, Math.sqrt(rec._rawOi) * 3));
+                            // 取消散開位移，讓圓心全部原地對齊相機點位
+                            let offsetLat = baseCoord[0]; 
+                            let offsetLng = baseCoord[1];
+
+                            L.circleMarker([offsetLat, offsetLng], { radius: radius, fillColor: colorDict[rec.species], color: '#ffffff', weight: 1.5, fillOpacity: 0.75 })
+                             .bindTooltip(`<b>${loc}</b><br>物種: ${rec.species}<br>OI: ${rec.oi}<br>有效照片: ${rec.validPhotos}`)
+                             .addTo(oiLayerGroup);
+                        });
+                    });
+
+                    if(Object.keys(pointsToMap).length > 0) {
+                        let latlngs = Object.values(pointsToMap).map(pt => [pt.lat, pt.lng]);
+                        oiMap.fitBounds(L.latLngBounds(latlngs), {padding: [30, 30]});
+                    }
+                };
+
+                const exportResults = () => {
+                    if(oiResults.value.length === 0) return showMessage('沒有資料可匯出', 'error');
+                    const wb = XLSX.utils.book_new();
+                    
+                    let sheet1Data = oiResults.value.map(r => ({
+                        '分區/點位': r.location, '物種': r.species, '分類階層': r.taxonomy,
+                        '計算方式': r.method, '有效照片數(n)': r.validPhotos
+                    }));
+                    const ws1 = XLSX.utils.json_to_sheet(sheet1Data);
+                    XLSX.utils.book_append_sheet(wb, ws1, "有效照片數");
+
+                    let sheet2Data = oiResults.value.map(r => ({
+                        '分區/點位': r.location, '物種': r.species, '分類階層': r.taxonomy,
+                        '工作時(T)': workingHoursResult.value.find(w => w.name === r.location)?.hours || 0,
+                        '有效照片數(n)': r.validPhotos, 'OI值': r.oi
+                    }));
+                    const ws2 = XLSX.utils.json_to_sheet(sheet2Data);
+                    XLSX.utils.book_append_sheet(wb, ws2, "OI值分析");
+
+                    XLSX.writeFile(wb, "相機監測分析結果.xlsx");
+                    showMessage('報表匯出成功！');
+                };
+
+                const resetApp = () => {
+                    step.value = 1; files.data = null; files.species = null;
+                    rawData.value = []; speciesList.value = [];
+                    workingHoursResult.value = []; oiResults.value = [];
+                };
+
+                const summary = reactive({ totalPoints: 0, totalSpecies: 0, validPhotos: 0, workingHours: 0 });
+
+                window.addEventListener('resize', () => {
+                    if(mainMap) mainMap.invalidateSize();
+                    if(oiMap) oiMap.invalidateSize();
+                });
+
+                watch(currentTab, (newVal) => {
+                    nextTick(() => {
+                        if(newVal === 'camera_dist' && mainMap) mainMap.invalidateSize();
+                        if(newVal === 'oi_analysis' && oiMap) oiMap.invalidateSize();
+                    });
+                });
+
+                return {
+                    step, msg, tabs, currentTab, isDraggingData, isDraggingSpecies, files, filterSettings,
+                    handleFileSelect, handleDrop, triggerFileInput, processFiles, resetApp, summary,
+                    cameraPanelExpanded, calcMode, rawCameraNodes, filteredCameraTree, toggleNode, 
+                    isAllSelected, toggleSelectAllCameras, applyCameraFilters,
+                    zones, addGroup, removeGroup, removeCamFromGroup, onDragStart, onDropToZone, batchImportToZone, targetZoneForBatch,
+                    workingHoursResult, recalculateAll,
+                    validPhotoMethod, speciesAssignments, taxonomySortedSpecies,
+                    individualSpeciesTree, groupSpeciesTree, isTaxaExpanded, toggleTaxaExpansion,
+                    selectedSpecies, handleSpeciesClick, clearSelection, setSelectionToBoth, removeSelection,
+                    hasExcludedSpecies, restoreExcludedSpecies, excludedSpeciesList, showAddSpeciesDropdown, restoreSpecies, getNodeTextClass,
+                    onSpeciesDragStart, onDropToSpeciesMode,
+                    analyzeOI, oiResults, exportResults,
+                    uniqueSpeciesInMap, updateOIMap, speciesSearchQuery, dropdownOpen, 
+                    filteredDropdownSpecies, activeMapSpecies, isSpeciesOnMap, addSpeciesToMap, removeSpeciesFromMap
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
